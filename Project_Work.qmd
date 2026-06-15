@@ -1,0 +1,72 @@
+---
+title: "Project Work"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+# Project Introduction
+
+The goal of this project is to create a set of reusable R functions that can query, process, summarize, and visualize data from the Public Use Microdata Sample (PUMS) Census API. The PUMS data provide person-level survey information collected through the American Community Survey, allowing researchers to investigate demographic, economic, educational, and geographic patterns across the United States. Rather than manually constructing API requests and cleaning the returned data each time, this project focuses on developing functions that automate the entire workflow.
+
+# Retrieving Data from the Census API
+
+The first step in this project is to establish a reliable process for obtaining data from the Census PUMS API. Before creating more advanced functions, it is important to verify that a request can be successfully sent to the API and that the returned data can be imported into R.
+
+```{r}
+library(httr)
+library(jsonlite)
+library(tibble)
+
+# Census API URL (fixed example)
+url <- "https://api.census.gov/data/2022/acs/acs1/pums?get=SEX,PWGTP,MAR&for=division:*&SCHL=24&key=eb86df934ff00b4bbaa27d768425acced8a927e0"
+
+# send request
+url_response <- GET(url)
+
+# parse JSON content
+parsed <- fromJSON(rawToChar(url_response$content))
+
+# retrieve column names
+col_names <- parsed[1, ]
+data <- parsed[-1, ]
+
+# turn the data into a tibble and apply the column names
+census_data <- as_tibble(data)
+names(census_data) <- col_names
+
+census_data
+```
+
+
+
+Now, lets write a helper function to take what is returned by GET() and turn it into a nice tibble. This will automate what we did above.
+
+```{r}
+helper_fun <- function(response) {
+  parsed <- fromJSON(rawToChar(response$content))
+  col_names <- parsed[1, ]
+  data <- parsed[-1, ]
+  df <- as_tibble(data)
+  names(df) <- col_names
+  df
+}
+
+# test the function to see if it works
+helper_fun(url_response)
+
+# test it again using a different url
+url_response_2 <- GET("https://api.census.gov/data/2022/acs/acs1/pums?get=SEX,PWGTP,MAR&for=state:*&SCHL=24&key=eb86df934ff00b4bbaa27d768425acced8a927e0")
+helper_fun(url_response_2)
+
+# everything seems to work correctly!
+```
+
+
+# Building a Flexible Census API Query Function
+
+In the previous step, we established a working workflow for retrieving data from the Census API and converting the raw JSON response into a clean tibble. While this confirms that the API connection and parsing process works, a fixed URL approach is not sufficient for exploratory analysis.
+
+To make the data pipeline more flexible and reusable, the next step is to build a function that allows users to dynamically specify key components of the API request. This includes the survey year, selected variables, and geographic scope of the data being returned.
+
