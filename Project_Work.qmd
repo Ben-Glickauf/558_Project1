@@ -39,8 +39,6 @@ names(census_data) <- col_names
 census_data
 ```
 
-
-
 Now, lets write a helper function to take what is returned by GET() and turn it into a nice tibble. This will automate what we did above.
 
 ```{r}
@@ -63,10 +61,145 @@ helper_fun(url_response_2)
 # everything seems to work correctly!
 ```
 
-
 # Building a Flexible Census API Query Function
 
 In the previous step, we established a working workflow for retrieving data from the Census API and converting the raw JSON response into a clean tibble. While this confirms that the API connection and parsing process works, a fixed URL approach is not sufficient for exploratory analysis.
 
 To make the data pipeline more flexible and reusable, the next step is to build a function that allows users to dynamically specify key components of the API request. This includes the survey year, selected variables, and geographic scope of the data being returned.
+
+Before writing this function, lets write a helper function that will turn time intervals into a numeric variable by taking the midpoint of the interval. 
+
+```{r}
+midpoint_time <- function(x) {
+
+  x <- as.numeric(x)
+
+  x[x <= 0] <- NA
+
+  return(x)
+}
+```
+
+
+```{r}
+census_api_fun <- function(year = 2022,
+                           numeric_vars = c("AGEP", "PWGTP"),
+                           categorical_vars = c("SEX"),
+                           geography = "State",
+                           geo_subset = "37",
+                           key = "eb86df934ff00b4bbaa27d768425acced8a927e0") {
+  
+  # ---------------------------
+  # 1. VALIDATE YEAR
+  # ---------------------------
+  if (!is.numeric(year) || year < 2010 || year > 2022) {
+    stop("Year must be between 2010 and 2022.")
+  }
+  
+  # ---------------------------
+  # 2. ALLOWED VARIABLES
+  # ---------------------------
+  allowed_numeric <- c("AGEP", "GASP", "GRPIP", "JWAP", "JWDP", "JWMNP")
+  allowed_categorical <- c("FER", "HHL", "SCH", "SCHL", "SEX")
+  
+  numeric_vars <- unique(c("PWGTP", numeric_vars))
+  
+  if (!all(numeric_vars %in% allowed_numeric | numeric_vars == "PWGTP")) {
+    stop("Invalid numeric variable selected.")
+  }
+  
+  if (length(categorical_vars) < 1) {
+    stop("You must select at least one categorical variable.")
+  }
+  
+  if (!all(categorical_vars %in% allowed_categorical)) {
+    stop("Invalid categorical variable selected.")
+  }
+  
+  if (all(numeric_vars == "PWGTP")) {
+    stop("Must include at least one numeric variable besides PWGTP.")
+  }
+  
+  # ---------------------------
+  # 3. GEOGRAPHY HANDLING (FIXED)
+  # ---------------------------
+  allowed_geo <- c("Region", "Division", "State")
+  
+  if (!(geography %in% allowed_geo)) {
+    stop("Geography must be Region, Division, or State.")
+  }
+  
+  if (geography == "State") {
+    geo_part <- paste0("state:", geo_subset)
+  } else if (geography == "Division") {
+    geo_part <- "division:*"
+  } else if (geography == "Region") {
+    geo_part <- "region:*"
+  }
+  
+  # ---------------------------
+  # 4. BUILD VARIABLE STRING
+  # ---------------------------
+  vars <- paste(c(numeric_vars, categorical_vars), collapse = ",")
+  
+  # ---------------------------
+  # 5. BUILD URL
+  # ---------------------------
+  url <- paste0(
+    "https://api.census.gov/data/",
+    year,
+    "/acs/acs1/pums?get=",
+    vars,
+    "&for=", geo_part,
+    "&key=", key
+  )
+  
+  # ---------------------------
+  # 6. GET DATA
+  # ---------------------------
+  response <- GET(url)
+  parsed <- fromJSON(rawToChar(response$content))
+  
+  # ---------------------------
+  # 7. TO TIBBLE
+  # ---------------------------
+  col_names <- parsed[1, ]
+  data <- parsed[-1, ]
+  
+  df <- as_tibble(data)
+  names(df) <- col_names
+  
+  # ---------------------------
+  # 8. TYPE CONVERSION
+  # ---------------------------
+  
+  for (v in numeric_vars) {
+    if (v %in% c("JWAP", "JWDP")) {
+      df[[v]] <- midpoint_time(df[[v]])
+    } else {
+      df[[v]] <- as.numeric(df[[v]])
+    }
+  }
+  
+  for (v in categorical_vars) {
+    df[[v]] <- as.factor(df[[v]])
+  }
+  
+  return(df)
+}
+```
+
+Lets test our function out
+
+```{r}
+# this should work
+census_api_fun(year = 2021, numeric_vars = c('AGEP', 'GASP'), categorical_vars = c('SEX', 'FER'), geography = 'State')
+
+# this should not work, year is out of bounds
+census_api_fun(year = 2009, numeric_vars = c('AGEP', 'GASP'), categorical_vars = c('SEX', 'FER'), geography = 'State')
+
+# Lets see how our time intervals do
+census_api_fun(year = 2015, numeric_vars = c('AGEP', 'JWDP'), categorical_vars = c('SEX', 'FER'), geography = 'Division')
+```
+
 
