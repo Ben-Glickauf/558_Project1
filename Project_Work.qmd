@@ -177,6 +177,8 @@ census_api_fun <- function(year = 2022,
     df[[v]] <- as.factor(df[[v]])
   }
   
+  class(df) <- c("census", class(df))
+  
   return(df)
 }
 ```
@@ -262,4 +264,146 @@ census_api_multi_year(
 
 Great! Everything seems to be working as it should. 
 
+Usually, our next step would be to process the data in our tibble appropriately. The `PWGTP` variable actually represents the number of (people) observations there should be for a particular row. We won’t do this, but we could create a new tibble with each row replicated `PWGTP` times. (This would create very large data frames in some instances and processing would be slow!). 
+
+Up to this point, we have built a flexible pipeline for querying and combining Census PUMS data. While this allows us to retrieve structured data across different years and geographic levels, we still need a way to efficiently summarize the resulting datasets.
+
+Rather than writing separate summary functions for each dataset type, we can take advantage of object-oriented programming in R, specifically S3 method dispatch. In R, generic functions such as `plot()` or `summary()` determine which method to use based on the class of the input object. For example, `plot()` behaves differently for data frames, functions, and time series objects because R internally calls `UseMethod("plot")` and then dispatches the appropriate method based on the object’s class.
+
+We can use this same idea to create a custom summary method for our Census data. By assigning a new class called "census" to our tibble, we allow R to recognize our dataset as a specialized object type. This enables us to define a custom method, `summary.census()`, that automatically computes meaningful statistics tailored to the structure of our data.
+
+Specifically, our summary function will:
+
+- Compute weighted means and weighted standard deviations for numeric variables (excluding `PWGTP`, which is used as the weight itself)
+
+- Compute weighted counts for categorical variables
+
+- Allow the user to optionally select which variables to summarize, while defaulting to all valid variables in the dataset
+
+This approach ensures that summaries properly reflect the survey design by incorporating the person-level weights (`PWGTP`) rather than treating each observation equally.
+
+```{r}
+summary.census <- function(object,
+                           numeric_vars = NULL,
+                           categorical_vars = NULL) {
+  
+  # ---------------------------
+  # Identify default variables
+  # ---------------------------
+  if (is.null(numeric_vars)) {
+    numeric_vars <- names(object)[sapply(object, is.numeric)]
+    numeric_vars <- setdiff(numeric_vars, c("PWGTP"))
+  }
+  
+  if (is.null(categorical_vars)) {
+    categorical_vars <- names(object)[sapply(object, is.factor)]
+  }
+  
+  w <- object$PWGTP
+  
+  # ---------------------------
+  # Numeric summaries (weighted mean + sd)
+  # ---------------------------
+  numeric_summary <- lapply(numeric_vars, function(v) {
+    
+    x <- object[[v]]
+    
+    mean_w <- sum(x * w, na.rm = TRUE) / sum(w, na.rm = TRUE)
+    
+    sd_w <- sqrt(
+      sum((x^2) * w, na.rm = TRUE) / sum(w, na.rm = TRUE) - mean_w^2
+    )
+    
+    list(
+      variable = v,
+      weighted_mean = mean_w,
+      weighted_sd = sd_w
+    )
+  })
+  
+  # ---------------------------
+  # Categorical summaries (weighted counts)
+  # ---------------------------
+  categorical_summary <- lapply(categorical_vars, function(v) {
+    
+    x <- object[[v]]
+    
+    counts <- tapply(w, x, sum, na.rm = TRUE)
+    
+    list(
+      variable = v,
+      weighted_counts = counts
+    )
+  })
+  
+  # ---------------------------
+  # Return structured output
+  # ---------------------------
+  result <- list(
+    numeric_summary = numeric_summary,
+    categorical_summary = categorical_summary
+  )
+  
+  class(result) <- "summary.census"
+  return(result)
+}
+```
+
+
+Lets test out this function by running summary(census_api_fun(year = 2021)) 
+
+```{r}
+data <- census_api_fun(year = 2021)
+summary(data)
+```
+
+Building on the custom `summary()` method, we can further extend the functionality of our "census" class by defining a custom plotting method. This allows us to use the generic `plot()` function while automatically producing a visualization tailored specifically to census survey data.
+
+In this case, we define a `plot.census()` method that creates a weighted boxplot comparing a numeric variable across the levels of a categorical variable. The inclusion of the survey weight variable `PWGTP` in the aesthetic mapping is important because each row in the dataset does not represent a single individual equally. Instead, the weights adjust each observation so that the resulting plot reflects the true population structure.
+
+To make the function flexible, the user specifies the categorical and numeric variables as column names. These are then accessed directly from the tibble using double bracket indexing (`[[ ]]`), which allows for clean and reliable programmatic selection of variables.
+
+For this function, we'll need both the `tidyverse` and `quantreg` packages, so make sure these are installed on your computer. You can install these packages by running `install.packages("your_package_here_in_quotes")`.
+
+```{r}
+library(tidyverse)
+library(quantreg)
+plot.census <- function(x, cat_var, num_var) {
+  
+  # ---------------------------
+  # 1. Input checks
+  # ---------------------------
+  if (missing(cat_var) || missing(num_var)) {
+    stop("You must specify one categorical variable and one numeric variable.")
+  }
+  
+  if (!(cat_var %in% names(x)) || !(num_var %in% names(x))) {
+    stop("One or both variables are not in the dataset.")
+  }
+  
+  # ---------------------------
+  # 2. Extract columns safely using [[ ]]
+  # ---------------------------
+  x_cat <- x[[cat_var]]
+  x_num <- x[[num_var]]
+  
+  # ---------------------------
+  # 3. Weighted boxplot
+  # ---------------------------
+  ggplot(x, aes(x = x_cat, y = x_num, weight = PWGTP)) +
+    geom_boxplot() +
+    labs(
+      x = cat_var,
+      y = num_var,
+      title = paste("Weighted distribution of", num_var, "by", cat_var)
+    )
+}
+```
+
+
+Let's test out our function.B
+
+```{r}
+plot.census(x = data, cat_var = "SEX", num_var = "AGEP")
+```
 
