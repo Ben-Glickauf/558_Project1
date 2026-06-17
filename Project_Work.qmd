@@ -19,13 +19,10 @@ library(httr)
 library(jsonlite)
 library(tibble)
 
-# Census API URL (fixed example)
+# Census API URL (example)
 url <- "https://api.census.gov/data/2022/acs/acs1/pums?get=SEX,PWGTP,MAR&for=division:*&SCHL=24&key=eb86df934ff00b4bbaa27d768425acced8a927e0"
 
-# send request
 url_response <- GET(url)
-
-# parse JSON content
 parsed <- fromJSON(rawToChar(url_response$content))
 
 # retrieve column names
@@ -67,12 +64,14 @@ helper_fun(url_response_2)
 
 In the previous step, we established a working workflow for retrieving data from the Census API and converting the raw JSON response into a clean tibble. While this confirms that the API connection and parsing process works, a fixed URL approach is not sufficient for exploratory analysis.
 
-To make the data pipeline more flexible and reusable, the next step is to build a function that allows users to dynamically specify key components of the API request. This includes the survey year, selected variables, and geographic scope of the data being returned.
+To make the data pipeline more flexible and reusable, the next step is to build a function that allows users to specify key components of the API request. This includes the survey year, selected variables, and geographic scope of the data being returned.
 
-Before writing this function, lets write a helper function that will turn time intervals into a numeric variable by taking the midpoint of the interval. 
+Before we do that, we first need to create the numeric_time function to clean and standardize the `JWAP` and `JWDP` variables. These variables are not stored as traditional numeric values. Instead, they are coded as time intervals that represent ranges of minutes or hours during which an event (such as arrival or departure from work) occurred. Because these values are interval-based rather than numeric, they cannot be directly used in calculations such as averages or other summary statistics.
+
+The purpose of the `numeric_time` function is to convert these coded values into a usable numeric format. It begins by coercing the input into a numeric type to ensure consistency across observations. It then replaces any values less than or equal to zero with NA, since these represent cases where the variable is not applicable.
 
 ```{r}
-midpoint_time <- function(x) {
+numeric_time <- function(x) {
   x <- as.numeric(x)
   x[x <= 0] <- NA
   return(x)
@@ -96,7 +95,7 @@ census_api_fun <- function(year = 2022,
   }
   
   # ---------------------------
-  # 2. ALLOWED VARIABLES
+  # 2. VARIABLES
   # ---------------------------
   allowed_numeric <- c("AGEP", "GASP", "GRPIP", "JWAP", "JWDP", "JWMNP")
   allowed_categorical <- c("FER", "HHL", "SCH", "SCHL", "SEX")
@@ -107,20 +106,12 @@ census_api_fun <- function(year = 2022,
     stop("Invalid numeric variable selected.")
   }
   
-  if (length(categorical_vars) < 1) {
-    stop("You must select at least one categorical variable.")
-  }
-  
   if (!all(categorical_vars %in% allowed_categorical)) {
     stop("Invalid categorical variable selected.")
   }
   
-  if (all(numeric_vars == "PWGTP")) {
-    stop("Must include at least one numeric variable besides PWGTP.")
-  }
-  
   # ---------------------------
-  # 3. GEOGRAPHY HANDLING (FIXED)
+  # 3. GEOGRAPHY
   # ---------------------------
   allowed_geo <- c("Region", "Division", "State")
   
@@ -128,22 +119,18 @@ census_api_fun <- function(year = 2022,
     stop("Geography must be Region, Division, or State.")
   }
   
-  if (geography == "State") {
-    geo_part <- paste0("state:", geo_subset)
-  } else if (geography == "Division") {
-    geo_part <- "division:*"
-  } else if (geography == "Region") {
-    geo_part <- "region:*"
-  }
+  geo_part <- switch(
+    geography,
+    "State" = paste0("state:", geo_subset),
+    "Division" = "division:*",
+    "Region" = "region:*"
+  )
   
   # ---------------------------
-  # 4. BUILD VARIABLE STRING
+  # 4. BUILD URL
   # ---------------------------
   vars <- paste(c(numeric_vars, categorical_vars), collapse = ",")
   
-  # ---------------------------
-  # 5. BUILD URL
-  # ---------------------------
   url <- paste0(
     "https://api.census.gov/data/",
     year,
@@ -153,14 +140,21 @@ census_api_fun <- function(year = 2022,
     "&key=", key
   )
   
-  # ---------------------------
-  # 6. GET DATA
-  # ---------------------------
   response <- GET(url)
-  parsed <- fromJSON(rawToChar(response$content))
   
   # ---------------------------
-  # 7. TO TIBBLE
+  # 5. CHECK RESPONSE BEFORE PARSING (CRITICAL FIX)
+  # ---------------------------
+  raw_text <- rawToChar(response$content)
+  
+  if (response$status_code != 200 || grepl("<html", raw_text)) {
+    stop(paste("API request failed for year", year, "\nURL:", url))
+  }
+  
+  parsed <- fromJSON(raw_text)
+  
+  # ---------------------------
+  # 6. TO TIBBLE
   # ---------------------------
   col_names <- parsed[1, ]
   data <- parsed[-1, ]
@@ -169,12 +163,11 @@ census_api_fun <- function(year = 2022,
   names(df) <- col_names
   
   # ---------------------------
-  # 8. TYPE CONVERSION
+  # 7. TYPE CONVERSION
   # ---------------------------
-  
   for (v in numeric_vars) {
     if (v %in% c("JWAP", "JWDP")) {
-      df[[v]] <- midpoint_time(df[[v]])
+      df[[v]] <- numeric_time(df[[v]])
     } else {
       df[[v]] <- as.numeric(df[[v]])
     }
@@ -188,11 +181,11 @@ census_api_fun <- function(year = 2022,
 }
 ```
 
-Lets test our function out
+Lets test our function out. We'll test it once without the optional `geography` argument, once with a `year` outside the accepted range, and once with one of the time interval variables (`JWDP` and `JWAP`).
 
 ```{r}
-# this should work
-census_api_fun(year = 2021, numeric_vars = c('AGEP', 'GASP'), categorical_vars = c('SEX', 'FER'), geography = 'State')
+# this should work, leave out the optional geography argument
+census_api_fun(year = 2021, numeric_vars = c('AGEP', 'GASP'), categorical_vars = c('SEX', 'FER'))
 
 # this should not work, year is out of bounds
 census_api_fun(year = 2009, numeric_vars = c('AGEP', 'GASP'), categorical_vars = c('SEX', 'FER'), geography = 'State')
@@ -200,5 +193,73 @@ census_api_fun(year = 2009, numeric_vars = c('AGEP', 'GASP'), categorical_vars =
 # Lets see how our time intervals do
 census_api_fun(year = 2015, numeric_vars = c('AGEP', 'JWDP'), categorical_vars = c('SEX', 'FER'), geography = 'Region')
 ```
+
+
+To extend the flexibility of the data pipeline, a final function was developed to allow users to retrieve Census PUMS data across multiple survey years. While the single-year function provides a complete workflow for querying and cleaning data from one specific year, many analyses require examining changes over time. Rather than requiring the user to manually call the function multiple times and combine results, this process is automated through a wrapper function.
+
+The multi-year function accepts a vector of years as input along with all of the same arguments used in the single-year function, including numeric variables, categorical variables, geographic level, and geographic subset. This ensures consistency in data processing across all years. As part of the function design, 2020 is explicitly removed from the input years, since the Census Bureau advises against using that year’s PUMS data due to disruptions caused by the COVID-19 pandemic.
+
+The function operates by iterating over each remaining year and calling the single-year census API function for each iteration. After each dataset is retrieved and cleaned, a new variable is added to indicate the survey year. This step is important because once the datasets are combined, the year variable serves as the key identifier for comparing observations across time.
+
+```{r}
+census_api_multi_year <- function(years,
+                                  numeric_vars = c("AGEP", "PWGTP"),
+                                  categorical_vars = c("SEX"),
+                                  geography = "State",
+                                  geo_subset = "37",
+                                  key = "eb86df934ff00b4bbaa27d768425acced8a927e0") {
+  
+  # ---------------------------
+  # 1. Remove invalid year (2020)
+  # ---------------------------
+  years <- years[years != 2020]
+  
+  if (length(years) == 0) {
+    stop("No valid years provided (2020 is not allowed).")
+  }
+  
+  # ---------------------------
+  # 2. Loop over years
+  # ---------------------------
+  results <- lapply(years, function(y) {
+    
+    df <- census_api_fun(
+      year = y,
+      numeric_vars = numeric_vars,
+      categorical_vars = categorical_vars,
+      geography = geography,
+      geo_subset = geo_subset,
+      key = key
+    )
+    
+    df$year <- y
+    df
+  })
+  
+  # ---------------------------
+  # 3. Combine results
+  # ---------------------------
+  final_df <- bind_rows(results)
+  
+  if (nrow(final_df) == 0) {
+    stop("All API requests failed. Check variables, geography, or API limits.")
+  }
+  
+  return(final_df)
+}
+```
+
+Lets test our function out.
+
+```{r}
+census_api_multi_year(
+  years = c(2015, 2017, 2021),
+  numeric_vars = c("AGEP", "JWDP"),
+  categorical_vars = c("SEX", "FER"),
+  geography = "State"
+)
+```
+
+Great! Everything seems to be working as it should. 
 
 
