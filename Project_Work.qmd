@@ -50,7 +50,9 @@ helper_fun <- function(response) {
   names(df) <- col_names
   df
 }
+```
 
+```{r}
 # test the function to see if it works
 helper_fun(url_response)
 
@@ -71,11 +73,8 @@ Before writing this function, lets write a helper function that will turn time i
 
 ```{r}
 midpoint_time <- function(x) {
-
   x <- as.numeric(x)
-
   x[x <= 0] <- NA
-
   return(x)
 }
 ```
@@ -199,7 +198,7 @@ census_api_fun(year = 2021, numeric_vars = c('AGEP', 'GASP'), categorical_vars =
 census_api_fun(year = 2009, numeric_vars = c('AGEP', 'GASP'), categorical_vars = c('SEX', 'FER'), geography = 'State')
 
 # Lets see how our time intervals do
-census_api_fun(year = 2015, numeric_vars = c('AGEP', 'JWDP'), categorical_vars = c('SEX', 'FER'), geography = 'Division')
+census_api_fun(year = 2015, numeric_vars = c('AGEP', 'JWDP'), categorical_vars = c('SEX', 'FER'), geography = 'Region')
 ```
 
 
