@@ -10,14 +10,13 @@ editor_options:
 
 The goal of this project is to create a set of reusable R functions that can query, process, summarize, and visualize data from the Public Use Microdata Sample (PUMS) Census API. The PUMS data provide person-level survey information collected through the American Community Survey, allowing researchers to investigate demographic, economic, educational, and geographic patterns across the United States. Rather than manually constructing API requests and cleaning the returned data each time, this project focuses on developing functions that automate the entire workflow.
 
-# Retrieving Data from the Census API
-
 The first step in this project is to establish a reliable process for obtaining data from the Census PUMS API. Before creating more advanced functions, it is important to verify that a request can be successfully sent to the API and that the returned data can be imported into R.
 
 ```{r}
 library(httr)
 library(jsonlite)
 library(tibble)
+library(tidyverse)
 
 # Census API URL (example)
 url <- "https://api.census.gov/data/2022/acs/acs1/pums?get=SEX,PWGTP,MAR&for=division:*&SCHL=24&key=eb86df934ff00b4bbaa27d768425acced8a927e0"
@@ -60,8 +59,6 @@ helper_fun(url_response_2)
 # everything seems to work correctly!
 ```
 
-# Building a Flexible Census API Query Function
-
 In the previous step, we established a working workflow for retrieving data from the Census API and converting the raw JSON response into a clean tibble. While this confirms that the API connection and parsing process works, a fixed URL approach is not sufficient for exploratory analysis.
 
 To make the data pipeline more flexible and reusable, the next step is to build a function that allows users to specify key components of the API request. This includes the survey year, selected variables, and geographic scope of the data being returned.
@@ -87,16 +84,12 @@ census_api_fun <- function(year = 2022,
                            geo_subset = "37",
                            key = "eb86df934ff00b4bbaa27d768425acced8a927e0") {
   
-  # ---------------------------
-  # 1. VALIDATE YEAR
-  # ---------------------------
+  # check year
   if (!is.numeric(year) || year < 2010 || year > 2022) {
     stop("Year must be between 2010 and 2022.")
   }
   
-  # ---------------------------
-  # 2. VARIABLES
-  # ---------------------------
+  # allowed variables 
   allowed_numeric <- c("AGEP", "GASP", "GRPIP", "JWAP", "JWDP", "JWMNP")
   allowed_categorical <- c("FER", "HHL", "SCH", "SCHL", "SEX")
   
@@ -109,42 +102,29 @@ census_api_fun <- function(year = 2022,
   if (!all(categorical_vars %in% allowed_categorical)) {
     stop("Invalid categorical variable selected.")
   }
-  
-  # ---------------------------
-  # 3. GEOGRAPHY
-  # ---------------------------
+
   allowed_geo <- c("Region", "Division", "State")
   
   if (!(geography %in% allowed_geo)) {
     stop("Geography must be Region, Division, or State.")
   }
   
-  geo_part <- switch(
-    geography,
-    "State" = paste0("state:", geo_subset),
-    "Division" = "division:*",
-    "Region" = "region:*"
-  )
+  geo_part <- switch(geography,
+                     "State" = paste0("state:", geo_subset),
+                     "Division" = "division:*",
+                     "Region" = "region:*")
   
-  # ---------------------------
-  # 4. BUILD URL
-  # ---------------------------
+  # build URL
   vars <- paste(c(numeric_vars, categorical_vars), collapse = ",")
   
-  url <- paste0(
-    "https://api.census.gov/data/",
-    year,
-    "/acs/acs1/pums?get=",
-    vars,
-    "&for=", geo_part,
-    "&key=", key
-  )
+  url <- paste0("https://api.census.gov/data/",
+                year,
+                "/acs/acs1/pums?get=",
+                vars,
+                "&for=", geo_part,
+                "&key=", key)
   
   response <- GET(url)
-  
-  # ---------------------------
-  # 5. CHECK RESPONSE BEFORE PARSING (CRITICAL FIX)
-  # ---------------------------
   raw_text <- rawToChar(response$content)
   
   if (response$status_code != 200 || grepl("<html", raw_text)) {
@@ -153,18 +133,13 @@ census_api_fun <- function(year = 2022,
   
   parsed <- fromJSON(raw_text)
   
-  # ---------------------------
-  # 6. TO TIBBLE
-  # ---------------------------
+  # make it a tibble
   col_names <- parsed[1, ]
   data <- parsed[-1, ]
   
   df <- as_tibble(data)
   names(df) <- col_names
   
-  # ---------------------------
-  # 7. TYPE CONVERSION
-  # ---------------------------
   for (v in numeric_vars) {
     if (v %in% c("JWAP", "JWDP")) {
       df[[v]] <- numeric_time(df[[v]])
@@ -190,7 +165,8 @@ Lets test our function out. We'll test it once without the optional `geography` 
 census_api_fun(year = 2021, numeric_vars = c('AGEP', 'GASP'), categorical_vars = c('SEX', 'FER'))
 
 # this should not work, year is out of bounds
-census_api_fun(year = 2009, numeric_vars = c('AGEP', 'GASP'), categorical_vars = c('SEX', 'FER'), geography = 'State')
+# I've commented this out to render the document
+#census_api_fun(year = 2009, numeric_vars = c('AGEP', 'GASP'), categorical_vars = c('SEX', #'FER'), geography = 'State')
 
 # Lets see how our time intervals do
 census_api_fun(year = 2015, numeric_vars = c('AGEP', 'JWDP'), categorical_vars = c('SEX', 'FER'), geography = 'Region')
@@ -211,36 +187,28 @@ census_api_multi_year <- function(years,
                                   geo_subset = "37",
                                   key = "eb86df934ff00b4bbaa27d768425acced8a927e0") {
   
-  # ---------------------------
-  # 1. Remove invalid year (2020)
-  # ---------------------------
+  # remove 2020
   years <- years[years != 2020]
   
   if (length(years) == 0) {
     stop("No valid years provided (2020 is not allowed).")
   }
   
-  # ---------------------------
-  # 2. Loop over years
-  # ---------------------------
+  # loop over years
   results <- lapply(years, function(y) {
     
-    df <- census_api_fun(
-      year = y,
-      numeric_vars = numeric_vars,
-      categorical_vars = categorical_vars,
-      geography = geography,
-      geo_subset = geo_subset,
-      key = key
-    )
-    
+    df <- census_api_fun(year = y,
+                         numeric_vars = numeric_vars,
+                         categorical_vars = categorical_vars,
+                         geography = geography,
+                         geo_subset = geo_subset,
+                         key = key)
+
     df$year <- y
     df
   })
   
-  # ---------------------------
-  # 3. Combine results
-  # ---------------------------
+  # combine results
   final_df <- bind_rows(results)
   
   if (nrow(final_df) == 0) {
@@ -254,11 +222,10 @@ census_api_multi_year <- function(years,
 Lets test our function out.
 
 ```{r}
-census_api_multi_year(
-  years = c(2015, 2017, 2021),
-  numeric_vars = c("AGEP", "JWDP"),
-  categorical_vars = c("SEX", "FER"),
-  geography = "State"
+census_api_multi_year(years = c(2015, 2017, 2021),
+                      numeric_vars = c("AGEP", "JWDP"),
+                      categorical_vars = c("SEX", "FER"),
+                      geography = "State"
 )
 ```
 
@@ -287,9 +254,6 @@ summary.census <- function(object,
                            numeric_vars = NULL,
                            categorical_vars = NULL) {
   
-  # ---------------------------
-  # Identify default variables
-  # ---------------------------
   if (is.null(numeric_vars)) {
     numeric_vars <- names(object)[sapply(object, is.numeric)]
     numeric_vars <- setdiff(numeric_vars, c("PWGTP"))
@@ -301,9 +265,7 @@ summary.census <- function(object,
   
   w <- object$PWGTP
   
-  # ---------------------------
-  # Numeric summaries (weighted mean + sd)
-  # ---------------------------
+  # numeric summaries
   numeric_summary <- lapply(numeric_vars, function(v) {
     
     x <- object[[v]]
@@ -321,28 +283,17 @@ summary.census <- function(object,
     )
   })
   
-  # ---------------------------
-  # Categorical summaries (weighted counts)
-  # ---------------------------
+  # categorical summaries (weighted counts)
   categorical_summary <- lapply(categorical_vars, function(v) {
     
     x <- object[[v]]
-    
     counts <- tapply(w, x, sum, na.rm = TRUE)
+    list(variable = v, weighted_counts = counts)
     
-    list(
-      variable = v,
-      weighted_counts = counts
-    )
   })
   
-  # ---------------------------
-  # Return structured output
-  # ---------------------------
-  result <- list(
-    numeric_summary = numeric_summary,
-    categorical_summary = categorical_summary
-  )
+  # return the output
+  result <- list(numeric_summary = numeric_summary, categorical_summary = categorical_summary)
   
   class(result) <- "summary.census"
   return(result)
@@ -350,7 +301,7 @@ summary.census <- function(object,
 ```
 
 
-Lets test out this function by running summary(census_api_fun(year = 2021)) 
+Lets test out this function by running `summary(census_api_fun(year = 2021))`.
 
 ```{r}
 data <- census_api_fun(year = 2021)
@@ -361,18 +312,14 @@ Building on the custom `summary()` method, we can further extend the functionali
 
 In this case, we define a `plot.census()` method that creates a weighted boxplot comparing a numeric variable across the levels of a categorical variable. The inclusion of the survey weight variable `PWGTP` in the aesthetic mapping is important because each row in the dataset does not represent a single individual equally. Instead, the weights adjust each observation so that the resulting plot reflects the true population structure.
 
-To make the function flexible, the user specifies the categorical and numeric variables as column names. These are then accessed directly from the tibble using double bracket indexing (`[[ ]]`), which allows for clean and reliable programmatic selection of variables.
+To make the function flexible, the user specifies the categorical and numeric variables as column names. These are then accessed directly from the tibble using double brackets like so: (`[[ ]]`). This allows for clean and reliable selection of variables.
 
-For this function, we'll need both the `tidyverse` and `quantreg` packages, so make sure these are installed on your computer. You can install these packages by running `install.packages("your_package_here_in_quotes")`.
+For this function, we'll need both the `tidyverse` package, so make sure it is installed on your computer. You can install this packages by running `install.packages("tidyverse")`.
 
 ```{r}
 library(tidyverse)
-library(quantreg)
 plot.census <- function(x, cat_var, num_var) {
   
-  # ---------------------------
-  # 1. Input checks
-  # ---------------------------
   if (missing(cat_var) || missing(num_var)) {
     stop("You must specify one categorical variable and one numeric variable.")
   }
@@ -381,15 +328,11 @@ plot.census <- function(x, cat_var, num_var) {
     stop("One or both variables are not in the dataset.")
   }
   
-  # ---------------------------
-  # 2. Extract columns safely using [[ ]]
-  # ---------------------------
+  # extract columns 
   x_cat <- x[[cat_var]]
   x_num <- x[[num_var]]
   
-  # ---------------------------
-  # 3. Weighted boxplot
-  # ---------------------------
+  # build the boxplot
   ggplot(x, aes(x = x_cat, y = x_num, weight = PWGTP)) +
     geom_boxplot() +
     labs(
@@ -401,9 +344,74 @@ plot.census <- function(x, cat_var, num_var) {
 ```
 
 
-Let's test out our function.B
+Let's test out our function.
 
 ```{r}
 plot.census(x = data, cat_var = "SEX", num_var = "AGEP")
 ```
+
+
+# Investigating Age Differences Across Educational Attainment in North Carolina
+
+Now that the Census API function, summary method, and plotting tools have been developed, we can use them to explore a substantive question in the data. One interesting relationship to examine is how age varies across different levels of educational attainment within North Carolina.
+
+In this analysis, we use `AGEP` (age) as the numeric variable and `SCHL` (educational attainment) as the categorical grouping variable. This allows us to assess how the age distribution differs across the most common education categories in the population.
+
+We begin by pulling the relevant variables from the Census API using our custom function:
+
+```{r}
+data <- census_api_fun(year = 2021,
+                       numeric_vars = c("AGEP"),
+                       categorical_vars = c("SCHL"),
+                       geography = "State")
+```
+
+
+Because `SCHL` contains many possible categories, many of which occur infrequently, we reduce complexity by keeping only the four most common education categories. This step ensures that the resulting visualization remains interpretable. 
+
+
+```{r}
+data <- data[data$SCHL %in% names(sort(table(data$SCHL), decreasing = TRUE)[1:4]), ]
+```
+
+Next, we apply the custom summary method for objects of class census to obtain weighted descriptive statistics for age and counts of education categories:
+
+```{r}
+summary.census(data)
+```
+
+We then visualize the relationship using the custom weighted boxplot function:
+
+```{r}
+plot.census(data, cat_var = "SCHL", num_var = "AGEP")
+```
+
+This plot displays the distribution of age across the most common educational attainment categories while incorporating survey weights. This ensures that each observation contributes proportionally to the population it represents.
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+data <- census_api_fun(
+  year = 2021,
+  numeric_vars = c("AGEP"),
+  categorical_vars = c("SCHL"),
+  geography = "State",
+  geo_subset = "37"
+)
+
+data <- data[data$SCHL %in% names(sort(table(data$SCHL), decreasing = TRUE)[1:4]), ]
+summary.census(data)
+
+plot.census(data, cat_var = "SCHL", num_var = "AGEP")
+```
+
 
