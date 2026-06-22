@@ -304,8 +304,8 @@ summary.census <- function(object,
 Lets test out this function by running `summary(census_api_fun(year = 2021))`.
 
 ```{r}
-data <- census_api_fun(year = 2021)
-summary(data)
+test_data_2021 <- census_api_fun(year = 2021)
+summary(test_data_2021)
 ```
 
 Building on the custom `summary()` method, we can further extend the functionality of our "census" class by defining a custom plotting method. This allows us to use the generic `plot()` function while automatically producing a visualization tailored specifically to census survey data.
@@ -347,71 +347,52 @@ plot.census <- function(x, cat_var, num_var) {
 Let's test out our function.
 
 ```{r}
-plot.census(x = data, cat_var = "SEX", num_var = "AGEP")
+plot.census(x = test_data_2021, cat_var = "SEX", num_var = "AGEP")
 ```
 
 
 # Investigating Age Differences Across Educational Attainment in North Carolina
 
-Now that the Census API function, summary method, and plotting tools have been developed, we can use them to explore a substantive question in the data. One interesting relationship to examine is how age varies across different levels of educational attainment within North Carolina.
+Now that the Census API functions, custom summary method, and custom plotting method have been developed, we can use them together to explore a meaningful question within the ACS PUMS data. One interesting relationship to examine is how housing cost burden varies across different levels of educational attainment.
 
-In this analysis, we use `AGEP` (age) as the numeric variable and `SCHL` (educational attainment) as the categorical grouping variable. This allows us to assess how the age distribution differs across the most common education categories in the population.
+In this analysis, we use `GRPIP` (gross rent as a percentage of household income) as a measure of housing cost burden and `SCHL` (educational attainment) as the grouping variable. This allows us to investigate whether rent burden differs across education categories.
 
-We begin by pulling the relevant variables from the Census API using our custom function:
+We begin by retrieving the relevant variables from the Census API using the custom `census_api_fun()` function:
 
 ```{r}
 data <- census_api_fun(year = 2021,
-                       numeric_vars = c("AGEP"),
+                       numeric_vars = c("GRPIP"),
                        categorical_vars = c("SCHL"),
-                       geography = "State")
+                       geography = "State",
+                       geo_subset = "37")
 ```
 
 
-Because `SCHL` contains many possible categories, many of which occur infrequently, we reduce complexity by keeping only the four most common education categories. This step ensures that the resulting visualization remains interpretable. 
-
+Because the ACS contains many educational attainment categories and a wide range of housing cost burden values, visualizing the full dataset produced an overcrowded and difficult-to-read plot. To improve interpretability, we subset the data in two ways. First, we restricted the dataset to the four most common educational attainment categories. Second, we limited `GRPIP` values to observations between 0 and 50 in order to reduce the influence of extreme values and better visualize the central portion of the distribution.
 
 ```{r}
-data <- data[data$SCHL %in% names(sort(table(data$SCHL), decreasing = TRUE)[1:4]), ]
+housing_cost_data <- data[data$SCHL %in% names(sort(table(data$SCHL), decreasing=TRUE)[1:4]),]
+
+housing_cost_data <- housing_cost_data[
+  housing_cost_data$GRPIP > 0 & housing_cost_data$GRPIP <= 50, ]
 ```
 
-Next, we apply the custom summary method for objects of class census to obtain weighted descriptive statistics for age and counts of education categories:
+Next, we apply the custom summary method for census objects:
 
 ```{r}
-summary.census(data)
+summary.census(housing_cost_data)
 ```
 
-We then visualize the relationship using the custom weighted boxplot function:
+This produces weighted descriptive statistics for the numeric variable (`GRPIP`) along with frequency counts for the categorical variable (`SCHL`). The survey weights (`PWGTP`) ensure that the summaries better represent the underlying population rather than only the sampled observations.
 
 ```{r}
-plot.census(data, cat_var = "SCHL", num_var = "AGEP")
+plot.census(housing_cost_data, cat_var = "SCHL", num_var = "GRPIP")
 ```
 
-This plot displays the distribution of age across the most common educational attainment categories while incorporating survey weights. This ensures that each observation contributes proportionally to the population it represents.
+The resulting visualization suggests that housing cost burden varies somewhat across educational attainment categories, although the distributions still overlap considerably. After restricting the analysis to the four most common education categories and limiting `GRPIP` values to a more interpretable range, the weighted boxplots became substantially easier to compare.
 
+The medians and interquartile ranges differ slightly across the education groups, indicating that some educational attainment categories tend to experience somewhat lower rent burden than others. In general, categories associated with higher educational attainment appear to show slightly lower median `GRPIP` values and somewhat less variability, while lower attainment categories display somewhat higher typical rent burden levels.
 
+At the same time, the overlap between the distributions suggests that housing affordability challenges are present across multiple education groups rather than being isolated to a single category. This highlights the complexity of housing cost burden and suggests that educational attainment alone does not fully explain variation in rent burden
 
-
-
-
-
-
-
-
-
-
-```{r}
-data <- census_api_fun(
-  year = 2021,
-  numeric_vars = c("AGEP"),
-  categorical_vars = c("SCHL"),
-  geography = "State",
-  geo_subset = "37"
-)
-
-data <- data[data$SCHL %in% names(sort(table(data$SCHL), decreasing = TRUE)[1:4]), ]
-summary.census(data)
-
-plot.census(data, cat_var = "SCHL", num_var = "AGEP")
-```
-
-
+Because the analysis incorporates ACS survey weights through the `PWGTP` variable, the resulting summaries and visualizations are intended to better reflect population-level patterns rather than only the sampled individuals. Overall, this example demonstrates how the custom API retrieval function, S3 summary method, and S3 plotting method can work together to create a flexible and reproducible workflow for analyzing Census survey data in R.
